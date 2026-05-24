@@ -445,7 +445,7 @@ def extract_专业名称(sheet_name: str) -> str:
     name = re.sub(r"^(通用工程类|实体工程类)\s*[-、.：:]*\s*", "", name)
     for token in ["实体工程量清单", "实体工程清单", "工程量清单", "实体清单"]:
         name = name.replace(token, "")
-    name = name.strip(" -_—、.：:()（）")
+    name = name.strip(" -_—、.：:")
     return name or sheet_name.strip()
 
 
@@ -464,9 +464,11 @@ def join_path(*parts: str) -> str:
 
 def extract_contract_name(file_name: str) -> str:
     """从文件名提取合同名称"""
-    name = file_name.replace(".xlsx", "").replace(".xls", "")
-    name = re.sub(r'^[\d\-_]+', '', name)
+    name = os.path.splitext(file_name)[0]
     name = name.lstrip("~$")
+    name = re.sub(r"^\s*\d+\s*[、，,\-_—:：;；]\s*", "", name)
+    name = re.sub(r"^\s*\d+\s*[.．。]\s+(?=\S)", "", name)
+    name = name.lstrip(" \t\r\n-_—、，,.:：;；。．")
     if len(name) > 80:
         name = name[:80]
     return name.strip()

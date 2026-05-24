@@ -87,6 +87,15 @@ def join_path(*parts):
     return '/'.join(result)
 
 
+def build_source_remark(item, import_time: str) -> str:
+    return (
+        f"来源文件:{item.source_file} | "
+        f"Sheet:{item.source_sheet} | "
+        f"Excel行:{item.source_row} | "
+        f"导入时间:{import_time}"
+    )
+
+
 # ========== Excel解析函数 ==========
 
 def discover_target_sheets(excel_path):
@@ -700,7 +709,7 @@ def import_contract(contract_name: str, excel_path: str, table_id: str = None, s
     for item in cleaned_items:
         sheet_counts[item.source_sheet] = sheet_counts.get(item.source_sheet, 0) + 1
         all_records.append({
-            '备注': import_time,
+            '备注': build_source_remark(item, import_time),
             '合同名称': contract_name,
             '页签': item.页签,
             '层级路径': item.层级路径 or join_path(item.科目, item.二级页签),

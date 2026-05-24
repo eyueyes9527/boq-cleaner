@@ -131,23 +131,29 @@ D:\单价库\精装工程\一批次\
   --out-dir ".\runs\fitout_non_residential_scan"
 ```
 
-导入前 dry-run，发现 `层级路径`、`计量单位`、`工程数量`、`不含税单价` 为空会直接拦截：
+生成本地待复制 CSV，发现 `层级路径`、`计量单位`、`工程数量`、`不含税单价` 为空会直接拦截：
 
 ```powershell
 & "C:\Users\56237\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe" `
   ".\scripts\import_source_dir_to_lark.py" `
   "D:\单价库\精装工程\一批次\住宅清单" `
-  --table-id tblY7o8bNiBxEYGA `
-  --dry-run
+  --table-id tblY7o8bNiBxEYGA
 
 & "C:\Users\56237\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe" `
   ".\scripts\import_source_dir_to_lark.py" `
   "D:\单价库\精装工程\一批次\非住宅清单" `
-  --table-id tblRdm1rcN46iGuw `
-  --dry-run
+  --table-id tblRdm1rcN46iGuw
 ```
 
-正式导入时去掉 `--dry-run`。导入脚本会在 `runs\fitout_import_YYYYMMDD_HHMMSS\` 保存 `cleaned_records.csv`、`blocked_issues.csv`、批量 JSON 和日志。
+默认只生成本地文件，不调用飞书。脚本会在 `runs\fitout_import_YYYYMMDD_HHMMSS_microseconds_<table_id>\` 保存 `cleaned_records.csv` 和 `blocked_issues.csv`。如需调用飞书检查请求体，可加 `--dry-run`；如需正式写入，必须显式加 `--push`。
+
+导出的 `合同名称` 会清理开头列表序号和残留标点；`页签` 会保留成对括号，例如 `公区（包干）`。
+
+第一列 `备注` 会写入来源追溯信息：
+
+```text
+来源文件:<文件名> | Sheet:<页签名> | Excel行:<行号> | 导入时间:<时间>
+```
 
 固定飞书视图列顺序时，需要先确认目标表字段 ID 与 `scripts\fitout_view_fields.json` 一致；不一致时应按新表字段 ID 重新生成 JSON：
 

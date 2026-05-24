@@ -16,7 +16,7 @@ C:\Users\56237\Documents\project-hysw\_codex_backup_20260521_175251
 
 | 字段 | 说明 |
 |---|---|
-| 备注 | 来源或导入时间 |
+| 备注 | 来源文件、Sheet、Excel 行号、导入时间 |
 | 合同名称 | 文件名提取或导入参数 |
 | 页签 | Excel 实体清单 sheet 的专业名称 |
 | 层级路径 | `科目/二级页签` 合并字段，使用 `/` 分层；无显式层级时用 `页签` 兜底 |
@@ -41,6 +41,7 @@ C:\Users\56237\Documents\project-hysw\_codex_backup_20260521_175251
 - 空值导入前必须清零：`不含税单价`、`工程数量`、`计量单位`、`层级路径` 不允许为空。
 - 可自动修复：分楼栋/分区域工程量求和、供应综合单价+安装综合单价求和、同文件同名项目唯一单位回填。
 - 可自动跳过：非清单项、无单位且数量/单价/合价均为 0 的占位行。
+- 批量导入 `备注` 格式：`来源文件:<文件名> | Sheet:<页签名> | Excel行:<行号> | 导入时间:<时间>`。
 
 典型修复：`恢复对景观赏水景`、`恢复休憩空间`、`恢复归家叠水水景`、`恢复3B架空层地面`、`展示区现状绿化...` 这类空类别标题互为同级，不应合并成 `A/B/C/D/E`。
 
@@ -121,14 +122,16 @@ C:\Users\56237\Documents\project-hysw\_codex_backup_20260521_175251
 & "C:\Users\56237\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe" `
   ".\scripts\import_source_dir_to_lark.py" `
   "D:\单价库\精装工程\一批次\住宅清单" `
-  --table-id tblY7o8bNiBxEYGA `
-  --dry-run
+  --table-id tblY7o8bNiBxEYGA
 
 & "C:\Users\56237\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe" `
   ".\scripts\import_source_dir_to_lark.py" `
   "D:\单价库\精装工程\一批次\非住宅清单" `
-  --table-id tblRdm1rcN46iGuw `
-  --dry-run
+  --table-id tblRdm1rcN46iGuw
+
+# 默认只生成本地 cleaned_records.csv / blocked_issues.csv，不调用飞书。
+# 检查飞书请求体时加 --dry-run；正式写入时必须显式加 --push。
+# 合同名称会清理开头列表序号/残留标点，页签会保留成对括号。
 
 & "C:\Users\56237\AppData\Roaming\npm\lark-cli.cmd" base +view-set-visible-fields `
   --base-token ARDubM91FaL62esCg1hcnHYtnFh `
