@@ -1,0 +1,88 @@
+# 工程量清单导入规则配置
+# 下游 agent 在执行任务前优先读取此文件，不要依赖聊天记忆。
+
+feishu:
+  base_token: "ARDubM91FaL62esCg1hcnHYtnFh"
+  primary_table_id: "tbleZCShQmE1aRhQ"
+  primary_table_name: "工程量清单"
+  lark_cli_path: "C:\\Users\\56237\\AppData\\Roaming\\npm\\lark-cli.cmd"
+
+  field_ids:
+    项目名称: "fldiVMozmY"
+    项目编号: "fldgEQEjf9"
+    项目特征描述: "fldxVGnJpn"
+    计量单位: "fldjhCzC8y"
+    工程数量: "fldPBDN6QO"
+    不含税单价: "fldbFXoOC5"
+    汇总合价: "fldGGC9sXw"
+    合同名称: "flddaIcKu7"
+    页签: "fldEvvjofm"
+    层级路径: "fldlIfsrTX"
+    备注: "fldJkEw41C"
+    定价模式: "fldpLjVfSv"
+
+pricing:
+  b_type_keywords: ["基准价", "浮率", "投标价"]
+  discount_keywords: ["下浮后", "折后"]
+  float_rate:
+    multiplier_threshold: 0.5
+    multiplier_formula: "base_price * float_rate"
+    rate_formula: "base_price * (1 + float_rate)"
+    validation_tolerance: 0.05
+
+excel:
+  skip_keywords:
+    - "小计"
+    - "合计"
+    - "汇总"
+    - "暂列金额"
+    - "税金"
+    - "规费"
+    - "说明"
+    - "备注"
+    - "封皮"
+    - "编制说明"
+    - "总计"
+  skip_sheet_keywords:
+    - "封皮"
+    - "编制说明"
+    - "汇总表"
+    - "综合单价分析"
+  empty_values: ["/", "-", "—", "", null]
+
+hierarchy:
+  output_field: "层级路径"
+  separator: "/"
+  source_fields: ["科目", "二级页签"]
+  rule: "无编号、无单位、无单价但有名称的行视为同级标题，切换当前二级标题，不追加到上一标题。"
+
+row_visibility:
+  read_hidden_rows: true
+
+splitting:
+  max_rows_per_table: 20000
+  same_contract_same_table: true
+  overflow_suffix_pattern: "_002"
+
+writing:
+  lark_cli:
+    batch_size_read: 200
+    batch_size_create: 200
+    batch_size_update: 10
+    batch_size_delete: 200
+
+blockers:
+  - "字段映射缺失（关键列找不到）"
+  - "合同名称为空"
+  - "单个合同超过 20000 行"
+  - "浮率验证失败（投标价 ≠ 基准价 × 浮率，差异 > 0.05）"
+  - "匹配时出现无匹配或多重匹配"
+
+paths:
+  excel_source_dirs:
+    - "D:/单价库/景观工程"
+    - "D:/单价库/景观工程/第二批"
+  default_input_csv: "D:/单价库/深圳公司单价库_景观工程.csv"
+  default_output_csv: "D:/单价库/深圳公司单价库_景观工程.fixed.csv"
+  runs_dir: "runs/"
+  scripts_dir: "scripts/"
