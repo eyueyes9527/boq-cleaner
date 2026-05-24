@@ -103,6 +103,15 @@ def find_header_anchor(ws) -> Optional[Tuple[int, int]]:
                     v2 = str(get_cell_value(ws, row, c2) or "").strip()
                     if "项目名称" in v2:
                         return row, col
+    # 回退：部分精装清单第一列为“序号”，没有“项目编号”
+    for row in range(1, min(ws.max_row + 1, 30)):
+        for col in range(1, min(ws.max_column + 1, 20)):
+            val = str(get_cell_value(ws, row, col) or "").strip()
+            if val == "序号":
+                for c2 in range(1, min(ws.max_column + 1, 20)):
+                    v2 = str(get_cell_value(ws, row, c2) or "").strip()
+                    if "项目名称" in v2:
+                        return row, col
     return None
 
 
@@ -115,21 +124,29 @@ def detect_pricing_mode(ws, header_row: int, anchor_col: int) -> str:
     - 下浮后B型：上一行有"下浮后"标记，表头有综合单价（原价+折后价）
     """
     limit_row = min(header_row + 4, ws.max_row + 1)
-    limit_col = min(anchor_col + 15, ws.max_column + 1)
+    limit_col = min(anchor_col + 40, ws.max_column + 1)
+    block_has_base = False
+    block_has_rate = False
+    block_has_bid = False
     for row in range(header_row, limit_row):
         has_base = False
         has_rate = False
         has_bid = False
         for col in range(anchor_col, limit_col):
             val = str(get_cell_value(ws, row, col) or "").strip()
-            if "基准价" in val:
+            if "基准价" in val or "基准单价" in val:
                 has_base = True
+                block_has_base = True
             if "浮率" in val:
                 has_rate = True
+                block_has_rate = True
             if "投标价" in val:
                 has_bid = True
+                block_has_bid = True
         if has_base and has_rate and has_bid:
             return "B"
+    if block_has_base and block_has_rate and block_has_bid:
+        return "B"
 
     # 下浮后模式检测：上一行有"下浮后"标记
     if header_row > 1:
@@ -152,7 +169,7 @@ def scan_column_map(ws, header_row: int, anchor_col: int) -> dict:
     """
     col_map = {}
 
-    limit_col = min(anchor_col + 18, ws.max_column + 1)
+    limit_col = min(anchor_col + 40, ws.max_column + 1)
 
     # 第0遍：扫描 header_row-1 行，找出标记为"下浮后"的列
     discounted_cols = set()
@@ -207,6 +224,9 @@ def scan_column_map(ws, header_row: int, anchor_col: int) -> dict:
         if "投标价" in v:
             col_map["投标价"] = offset
 
+        if "主材价" in v:
+            col_map["主材价"] = offset
+
         # 综合单价/不含税单价处理（支持下浮后模式）
         if "综合单价" in v and "不含" in v:
             if c in discounted_cols:
@@ -222,7 +242,7 @@ def scan_column_map(ws, header_row: int, anchor_col: int) -> dict:
             else:
                 col_map["单价"] = offset
 
-        if "基准价" in v and ("不含税" in v or "不含增值税" in v):
+        if ("基准价" in v or "基准单价" in v) and ("不含税" in v or "不含增值税" in v):
             col_map["基准价"] = offset
 
         if "浮率" in v:
@@ -247,10 +267,23 @@ def scan_column_map(ws, header_row: int, anchor_col: int) -> dict:
         
         if "投标价" in mv and "投标价" not in col_map:
             col_map["投标价"] = offset
+        if "主材价" in mv and "主材价" not in col_map:
+            col_map["主材价"] = offset
         if "汇总合价" in mv and "汇总合价" not in col_map:
             col_map["汇总合价"] = offset
         if "汇总工程量" in mv and "汇总工程量" not in col_map:
             col_map["汇总工程量"] = offset
+
+    # 第2.5遍：支持“下浮后综合单价”分组。
+    # 上一行是分组标题，当前行仍是“不含增值税综合单价（元）”。
+    if header_row > 1:
+        for c in range(anchor_col, limit_col):
+            prev = str(get_cell_value(ws, header_row - 1, c) or "").strip()
+            current = str(ws.cell(header_row, c).value or "").strip()
+            if "下浮后" in prev and "综合单价" in current and "单价分析" not in prev:
+                offset = c - anchor_col
+                col_map["单价"] = offset
+                col_map["投标价"] = offset
 
     # 第3遍：如果关键列还没找到，查子表头行（也采用覆盖式，让最后出现的合价列胜出）
     if "单价" not in col_map or "汇总合价" not in col_map:
@@ -269,8 +302,43 @@ def scan_column_map(ws, header_row: int, anchor_col: int) -> dict:
                     col_map["汇总合价"] = offset  # 覆盖式，取靠后的投标价合价
                 if "投标价" not in col_map and "投标价" in v:
                     col_map["投标价"] = offset
+                if "主材价" not in col_map and "主材价" in v:
+                    col_map["主材价"] = offset
                 if "汇总工程量" not in col_map and "汇总工程量" in v:
                     col_map["汇总工程量"] = offset
+
+    # 第4遍：处理两层表头。
+    # 例如顶层“投标价（不含增值税）”横跨“综合单价/汇总合价”两列，
+    # 必须用子表头把投标价单价和投标价合价拆开，否则会误取合价列为单价。
+    limit_sub = min(header_row + 4, ws.max_row + 1)
+    for r in range(header_row + 1, limit_sub):
+        for c in range(anchor_col, limit_col):
+            top = str(get_cell_value(ws, header_row, c) or "").strip()
+            sub = str(ws.cell(r, c).value or "").strip()
+            if not top or not sub:
+                continue
+            offset = c - anchor_col
+            if "基准价" in top or "基准单价" in top:
+                if "综合单价" in sub:
+                    col_map["基准价"] = offset
+                    col_map.setdefault("单价", offset)
+                elif "汇总合价" in sub:
+                    col_map.setdefault("基准合价", offset)
+            if "投标价" in top:
+                if "综合单价" in sub:
+                    col_map["投标价"] = offset
+                elif "汇总合价" in sub:
+                    col_map["汇总合价"] = offset
+
+    # 单层B型表头可能只有“投标价-不含增值税”合并跨两列：
+    # 第一列是投标单价，后一列是投标合价。
+    if "投标价" in col_map and "汇总合价" not in col_map:
+        candidate = anchor_col + col_map["投标价"] + 1
+        if candidate < limit_col:
+            top = str(get_cell_value(ws, header_row, candidate) or "").strip()
+            direct = str(ws.cell(header_row, candidate).value or "").strip()
+            if not direct and "投标价" in top:
+                col_map["汇总合价"] = candidate - anchor_col
 
     return col_map
 
@@ -313,6 +381,34 @@ def parse_number(val) -> Optional[float]:
         return None
 
 
+def sum_numeric_cells(ws, row: int, start_col: int, end_col: int) -> Optional[float]:
+    """汇总一段单元格里的数值。没有任何数值时返回 None。"""
+    total = 0.0
+    found = False
+    for col in range(start_col, end_col + 1):
+        value = parse_number(get_cell_value(ws, row, col))
+        if value is not None:
+            total += value
+            found = True
+    return total if found else None
+
+
+def price_from_supply_install(ws, header_row: int, row: int, anchor_col: int, total_offset: int) -> Optional[float]:
+    """总综合单价为空时，尝试用同组供应综合单价+安装综合单价补足。"""
+    total_col = anchor_col + total_offset
+    if total_col - 2 < anchor_col:
+        return None
+    h1 = str(ws.cell(header_row, total_col - 2).value or "")
+    h2 = str(ws.cell(header_row, total_col - 1).value or "")
+    if "供应" not in h1 or "安装" not in h2:
+        return None
+    p1 = parse_number(get_cell_value(ws, row, total_col - 2))
+    p2 = parse_number(get_cell_value(ws, row, total_col - 1))
+    if p1 is None and p2 is None:
+        return None
+    return (p1 or 0.0) + (p2 or 0.0)
+
+
 # ----- 辅助 -----
 
 SKIP_SHEET_KEYWORDS = [
@@ -329,19 +425,28 @@ def should_process_sheet(sheet_name: str) -> bool:
     for kw in SKIP_SHEET_KEYWORDS:
         if kw in name:
             return False
-    # 只处理实体工程量清单（且不是汇总表）
-    if "实体工程量清单" in name and "汇总" not in name:
+    # 主清单sheet在不同合同中命名不一致：
+    # 实体工程量清单、实体工程清单、实体清单、2.2-精装工程量清单等都应处理。
+    if "汇总" in name:
+        return False
+    if (
+        "实体工程量清单" in name
+        or "实体工程清单" in name
+        or "实体清单" in name
+        or "工程量清单" in name
+    ):
         return True
     return False
 
 
 def extract_专业名称(sheet_name: str) -> str:
     """从sheet名提取专业名称"""
-    # "通用工程类-实体工程量清单-大货硬景" -> "大货硬景"
-    parts = sheet_name.split("-")
-    if parts:
-        return parts[-1].strip()
-    return sheet_name.strip()
+    name = re.sub(r"^\s*\d+(?:\.\d+)*\s*[-、.：:]*\s*", "", sheet_name.strip())
+    name = re.sub(r"^(通用工程类|实体工程类)\s*[-、.：:]*\s*", "", name)
+    for token in ["实体工程量清单", "实体工程清单", "工程量清单", "实体清单"]:
+        name = name.replace(token, "")
+    name = name.strip(" -_—、.：:()（）")
+    return name or sheet_name.strip()
 
 
 def join_path(*parts: str) -> str:
@@ -440,6 +545,7 @@ def clean_excel(file_path: str) -> Tuple[List[CleanedItem], List[AnomalyItem]]:
                     sum_qty_off = col_map.get("汇总工程量")
                     base_off = col_map.get("基准价")
                     rate_off = col_map.get("上下浮率")
+                    material_off = col_map.get("主材价")
 
                     pid = get_cell_value(ws, row, col_offset + 0)
                     pname = get_cell_value(ws, row, col_offset + 1)
@@ -451,10 +557,13 @@ def clean_excel(file_path: str) -> Tuple[List[CleanedItem], List[AnomalyItem]]:
                     bid_price = get_cell_value(ws, row, col_offset + bid_off)
                     sum_price = get_cell_value(ws, row, col_offset + sum_off)
                     unit_price = parse_number(bid_price)
+                    if unit_price is None:
+                        unit_price = price_from_supply_install(ws, header_row, row, col_offset, bid_off)
 
                     # 提取基准价和上下浮率（用于定价信息）
                     base_price = parse_number(get_cell_value(ws, row, col_offset + base_off)) if base_off is not None else None
                     float_rate = parse_number(get_cell_value(ws, row, col_offset + rate_off)) if rate_off is not None else None
+                    material_price = parse_number(get_cell_value(ws, row, col_offset + material_off)) if material_off is not None else None
 
                     # 生成定价信息 + 浮率验证
                     pricing_info = ""
@@ -467,21 +576,30 @@ def clean_excel(file_path: str) -> Tuple[List[CleanedItem], List[AnomalyItem]]:
                             if abs(float_rate) > 0.5:
                                 expected = round(base_price * float_rate, 2)
                                 formula = f"基准价{base_price}×{float_rate}"
+                                if material_price is not None:
+                                    adjusted_expected = round(material_price + (base_price - material_price) * float_rate, 2)
+                                    if abs(unit_price - adjusted_expected) <= 0.05:
+                                        expected = adjusted_expected
+                                        formula = f"主材价{material_price}+(基准价{base_price}-主材价{material_price})×{float_rate}"
                             else:
                                 expected = round(base_price * (1 + float_rate), 2)
                                 formula = f"基准价{base_price}×(1+{float_rate})"
                             if abs(unit_price - expected) > 0.05:
-                                print(f"\n❌ 浮率异常！导入已停止")
+                                pid_preview = str(pid or "").strip()
+                                print("\n浮率异常！导入已停止")
                                 print(f"  投标价={unit_price} ≠ 计算值={expected}")
                                 print(f"  公式: {formula}")
                                 print(f"  文件: {file_name} | Sheet: {sheet_name} | 行: {row}")
-                                print(f"  项目编号: {pid_s}")
+                                print(f"  项目编号: {pid_preview}")
                                 print(f"  请检查数据源，修复后重新运行。\n")
                                 raise SystemExit(1)  # 停止导入
                     elif base_price is not None and unit_price is not None:
                         # 下浮后模式：无浮率列，从比值计算
-                        implied_rate = round(unit_price / base_price, 6)
-                        pricing_info = f"基准价:{base_price}, 上下浮率:{implied_rate}%"
+                        if base_price:
+                            implied_rate = round(unit_price / base_price, 6)
+                            pricing_info = f"基准价:{base_price}, 上下浮率:{implied_rate}%"
+                        else:
+                            pricing_info = f"基准价:{base_price}"
                     elif base_price is not None:
                         pricing_info = f"基准价:{base_price}"
                     else:
@@ -490,7 +608,7 @@ def clean_excel(file_path: str) -> Tuple[List[CleanedItem], List[AnomalyItem]]:
                     # A型: 用检测到的列偏移
                     price_off = col_map.get("单价", 6)
                     sum_off = col_map.get("汇总合价", 7)
-                    qty_off = col_map.get("工程数量", 5)
+                    qty_off = col_map.get("汇总工程量", col_map.get("工程数量", 5))
                     sum_qty_off = col_map.get("汇总工程量")
 
                     pid = get_cell_value(ws, row, col_offset + 0)
@@ -503,6 +621,8 @@ def clean_excel(file_path: str) -> Tuple[List[CleanedItem], List[AnomalyItem]]:
                     raw_price = get_cell_value(ws, row, col_offset + price_off)
                     sum_price = get_cell_value(ws, row, col_offset + sum_off)
                     unit_price = parse_number(raw_price)
+                    if unit_price is None:
+                        unit_price = price_from_supply_install(ws, header_row, row, col_offset, price_off)
 
                     # A型：自主报价
                     pricing_info = "自主报价"
@@ -516,6 +636,8 @@ def clean_excel(file_path: str) -> Tuple[List[CleanedItem], List[AnomalyItem]]:
             unit_s = str(unit or "").strip()
             qty_f = parse_number(qty)
             sum_qty_f = parse_number(sum_qty) if sum_qty is not None else None
+            if qty_f is None and sum_qty_f is None and sum_qty_off is not None and sum_qty_off > 5:
+                qty_f = sum_numeric_cells(ws, row, col_offset + 5, col_offset + sum_qty_off - 1)
             sum_price_f = parse_number(sum_price)
             
             # A型：如果汇总合价值明显不合理，忽略
@@ -525,6 +647,9 @@ def clean_excel(file_path: str) -> Tuple[List[CleanedItem], List[AnomalyItem]]:
 
             # 跳过完全空行
             if not pid_s and not pname_s and not pdesc_s:
+                continue
+            # 跳过只有编号/补项号、没有名称和单位的占位行。
+            if pid_s and not pname_s and not pdesc_s and not unit_s:
                 continue
 
             row_text = " ".join([pid_s, pname_s, pdesc_s])
@@ -546,7 +671,7 @@ def clean_excel(file_path: str) -> Tuple[List[CleanedItem], List[AnomalyItem]]:
                         pass  # 保留父级
                 continue
 
-            if cat == "二级页签":
+            if cat in ("页签", "二级页签"):
                 sub_page_tab = pname_s
                 continue
 
@@ -582,6 +707,10 @@ def clean_excel(file_path: str) -> Tuple[List[CleanedItem], List[AnomalyItem]]:
                 sub_page_tab = pname_s
                 continue
 
+            # 非清单项、无单位且金额数量均为0的行，通常是占位或无效行。
+            if not is_list and not unit_s and (qty_f in (None, 0.0)) and (unit_price in (None, 0.0)) and (sum_price_f in (None, 0.0)):
+                continue
+
             # 疑似有效行：有名称且有单位或数量
             is_suspect = False
             if not is_list and (has_unit or has_qty) and pname_s:
@@ -589,7 +718,7 @@ def clean_excel(file_path: str) -> Tuple[List[CleanedItem], List[AnomalyItem]]:
 
             # === 构建记录 ===
             subject_path = "|".join([v for k, v in sorted(section_categories.items(), key=lambda x: len(x[0]))])
-            layer_path = join_path(subject_path, sub_page_tab)
+            layer_path = join_path(subject_path, sub_page_tab) or page_tab
 
             item = CleanedItem(
                 source_file=file_name,
@@ -637,6 +766,17 @@ def clean_excel(file_path: str) -> Tuple[List[CleanedItem], List[AnomalyItem]]:
                 item.异常标记 = "|".join(notes)
 
             items.append(item)
+
+    # 用同文件内同名项目的唯一单位补齐源表偶发漏填单位。
+    units_by_name: Dict[str, set] = {}
+    for item in items:
+        if item.项目名称 and item.计量单位:
+            units_by_name.setdefault(item.项目名称, set()).add(item.计量单位)
+    for item in items:
+        if item.项目名称 and not item.计量单位:
+            units = units_by_name.get(item.项目名称, set())
+            if len(units) == 1:
+                item.计量单位 = next(iter(units))
 
     wb.close()
     return items, anomalies

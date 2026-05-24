@@ -10,6 +10,8 @@ PRIMARY_TABLE_ID = "tbleZCShQmE1aRhQ"
 PRIMARY_TABLE_NAME = "工程量清单"
 MAX_ROWS_PER_TABLE = 20000
 
+# 飞书视图 ID 不建议写死到导入逻辑；需要设置视图列顺序时通过命令参数传入。
+
 # lark-cli 路径
 LARK_CLI = r"C:\Users\56237\AppData\Roaming\npm\lark-cli.cmd"
 
@@ -50,4 +52,41 @@ SKIP_KEYWORDS = [
 TITLE_KEYWORDS = [
     "项目编号", "项目名称", "项目特征描述", "计量单位",
     "工程量", "综合单价", "基准价", "上下浮率", "投标价",
+]
+
+# 批量导入固定字段顺序。各专业、各表 ID 按实际情况通过命令参数指定。
+IMPORT_FIELD_ORDER = [
+    "备注",
+    "合同名称",
+    "页签",
+    "层级路径",
+    "项目编号",
+    "项目名称",
+    "项目特征描述",
+    "计量单位",
+    "工程数量",
+    "不含税单价",
+    "汇总合价",
+    "定价模式",
+]
+
+# 如需设置飞书视图显示顺序，可按目标表的实际字段 ID 生成对应 JSON。
+# 下方是 2026-05-24 精装一批次两张目标表的字段 ID 示例，不作为通用导入默认值。
+FITOUT_20260524_FIELD_IDS = {
+    "备注": "fldc3FP095",
+    "合同名称": "fldfYvtTf7",
+    "页签": "flddCMrUrQ",
+    "层级路径": "fld4lr2QgE",
+    "项目编号": "fld4JQfNLQ",
+    "项目名称": "fldWOAczKl",
+    "项目特征描述": "fldU4D3ONA",
+    "计量单位": "fldQTjIpbl",
+    "工程数量": "fldoIXF5dr",
+    "不含税单价": "fldgVsznD5",
+    "汇总合价": "fldTiCmy3Z",
+    "定价模式": "fld82Y4GvI",
+}
+
+FITOUT_20260524_VIEW_FIELD_IDS = [
+    FITOUT_20260524_FIELD_IDS[name] for name in IMPORT_FIELD_ORDER
 ]

@@ -31,7 +31,10 @@
 ├── NEXT_AGENT_HANDOFF.md
 └── scripts/
     ├── full_reimport.py
-    └── repair_csv_layer_path.py
+    ├── import_source_dir_to_lark.py
+    ├── repair_csv_layer_path.py
+    ├── fitout_view_fields.json
+    └── scan_source_dir.py
 ```
 
 当前可用工具链目录：
@@ -74,6 +77,91 @@ C:\Users\56237\Documents\project-hysw\_codex_backup_20260521_175251
   ".\scripts\full_reimport.py" --confirm
 ```
 
+## 批量扫描
+
+新批次导入前，先用 `scripts\scan_source_dir.py` 做本地扫描，不访问飞书、不创建字段、不导入：
+
+```powershell
+& "C:\Users\56237\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe" `
+  ".\scripts\scan_source_dir.py" `
+  "D:\单价库\精装工程\一批次" `
+  --out-dir ".\runs\fitout_batch_scan"
+```
+
+输出文件：
+
+- `scan_summary.csv`：按文件汇总清单行数、异常数、缺单价、缺工程量、空层级路径、空单位。
+- `scan_issues.csv`：抽样列出需人工确认的问题行。
+- `scan_items_sample.csv`：抽样导出清洗后记录，用于核查字段落列。
+
+## 批量分表导入
+
+新批次按需要分好文件夹后，先扫描再导入。是否拆表、拆几张表、每个目录导入哪张表，应按本次专业、数据量和飞书单表上限判断；工具链不固定住宅/非住宅表 ID。
+
+2026-05-24 精装一批次已验证目标，仅作为本次记录：
+
+- 住宅清单：`tblY7o8bNiBxEYGA`
+- 非住宅清单：`tblRdm1rcN46iGuw`
+- Base：`ARDubM91FaL62esCg1hcnHYtnFh`
+- 单表上限：20000 行；脚本按 200 行一批写入。
+
+推荐目录结构：
+
+```text
+D:\单价库\精装工程\一批次\
+├── 住宅清单\
+└── 非住宅清单\
+```
+
+扫描住宅：
+
+```powershell
+& "C:\Users\56237\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe" `
+  ".\scripts\scan_source_dir.py" `
+  "D:\单价库\精装工程\一批次\住宅清单" `
+  --out-dir ".\runs\fitout_residential_scan"
+```
+
+扫描非住宅：
+
+```powershell
+& "C:\Users\56237\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe" `
+  ".\scripts\scan_source_dir.py" `
+  "D:\单价库\精装工程\一批次\非住宅清单" `
+  --out-dir ".\runs\fitout_non_residential_scan"
+```
+
+导入前 dry-run，发现 `层级路径`、`计量单位`、`工程数量`、`不含税单价` 为空会直接拦截：
+
+```powershell
+& "C:\Users\56237\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe" `
+  ".\scripts\import_source_dir_to_lark.py" `
+  "D:\单价库\精装工程\一批次\住宅清单" `
+  --table-id tblY7o8bNiBxEYGA `
+  --dry-run
+
+& "C:\Users\56237\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe" `
+  ".\scripts\import_source_dir_to_lark.py" `
+  "D:\单价库\精装工程\一批次\非住宅清单" `
+  --table-id tblRdm1rcN46iGuw `
+  --dry-run
+```
+
+正式导入时去掉 `--dry-run`。导入脚本会在 `runs\fitout_import_YYYYMMDD_HHMMSS\` 保存 `cleaned_records.csv`、`blocked_issues.csv`、批量 JSON 和日志。
+
+固定飞书视图列顺序时，需要先确认目标表字段 ID 与 `scripts\fitout_view_fields.json` 一致；不一致时应按新表字段 ID 重新生成 JSON：
+
+```powershell
+& "C:\Users\56237\AppData\Roaming\npm\lark-cli.cmd" base +view-set-visible-fields `
+  --base-token ARDubM91FaL62esCg1hcnHYtnFh `
+  --table-id <table_id> `
+  --view-id vewwDxH04m `
+  --json "@scripts\fitout_view_fields.json" `
+  --as user
+```
+
+固定导入字段顺序为：备注、合同名称、页签、层级路径、项目编号、项目名称、项目特征描述、计量单位、工程数量、不含税单价、汇总合价、定价模式。目标表 ID 必须每次通过 `--table-id` 显式指定。
+
 ## CSV 层级修复
 
 默认修复景观工程 CSV：
@@ -104,13 +192,20 @@ C:\Users\56237\Documents\project-hysw\_codex_backup_20260521_175251
 
 ## 层级规则
 
-- `页签` 来自实体工程量清单 sheet 名中的专业名称。
-- `层级路径` = `科目/二级页签`。
+- `页签` 来自主清单 sheet 名中的专业名称。
+- `层级路径` = `科目/二级页签`；如果原表没有科目或二级页签行，则用 `页签` 兜底，避免空层级。
 - `类别 = 科目` 的行只更新科目路径，不输出。
 - `类别 = 二级页签` 的行切换当前二级标题。
 - `类别 = 三级页签` 的行追加到当前二级标题之后。
 - 无编号、无单位、无单价但有名称的行，视为同级标题，切换当前二级标题。
 - 隐藏行正常读取，不因 Excel 行隐藏状态跳过。
+- 主清单 sheet 兼容 `实体工程量清单`、`实体工程清单`、`实体清单`、`工程量清单` 等命名。
+- 表头兼容 `项目编号`、`项目编码`、`序号`；B 型价格兼容 `基准价`、`基准单价`、两层投标价表头。
+- 导入前扫描要求 `不含税单价`、`工程数量`、`计量单位`、`层级路径` 不为空。
+- 分楼栋/分区域工程量存在但汇总工程量为空时，自动汇总分项工程量。
+- 总综合单价为空但同组供应综合单价、安装综合单价存在时，自动相加补足。
+- 同文件同名项目只有一个明确单位时，用该单位补齐偶发漏填单位。
+- 非清单项、无单位且数量/单价/合价均为 0 的占位行不输出。
 
 `auto_split_table.py`、`scripts/full_reimport.py` 和 `scripts/repair_csv_layer_path.py` 均复用 `excel_reader.clean_excel()` 的清洗结果，避免多套层级规则不一致。
 
@@ -125,6 +220,10 @@ C:\Users\56237\Documents\project-hysw\_codex_backup_20260521_175251
 - 缺失单价检查
 - 飞书导入、分表、dry-run、全量重导入主流程
 - CSV 层级路径修复脚本
+- 批量源目录扫描脚本：`scripts/scan_source_dir.py`
+- 批量源目录导入脚本：`scripts/import_source_dir_to_lark.py`
+- 通用固定字段顺序配置：`config.IMPORT_FIELD_ORDER`
+- 视图列顺序示例：`scripts/fitout_view_fields.json`
 - Windows PowerShell 兼容的纯文本命令行输出
 
 ## 已清理能力
