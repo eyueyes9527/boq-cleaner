@@ -17,17 +17,28 @@ sys.path.insert(0, str(ROOT))
 
 from excel_reader import clean_excel  # noqa: E402
 import config  # noqa: E402
+from catalog_linker import CatalogLinkError, attach_catalog_links  # noqa: E402
 
 
 DEFAULT_BASE_TOKEN = config.BASE_TOKEN
 LARK_CLI = Path(config.LARK_CLI)
 BATCH_SIZE = 200
 FIELD_ORDER = config.IMPORT_FIELD_ORDER
+MAX_BATCH_RETRIES = 5
 
 
 def iter_excel_files(source_dir: Path):
+    converted_stems = {
+        path.stem
+        for path in source_dir.glob("*.xls*")
+        if path.suffix.lower() in {".xlsx", ".xlsm"}
+    }
     for path in sorted(source_dir.glob("*.xls*")):
-        if not path.name.startswith("~$"):
+        if path.name.startswith("~$"):
+            continue
+        if path.suffix.lower() == ".xls" and path.stem in converted_stems:
+            continue
+        else:
             yield path
 
 
@@ -99,10 +110,10 @@ def clean_records(source_dir: Path):
     return records, issues
 
 
-def write_csv(path: Path, records: list[dict]):
+def write_csv(path: Path, records: list[dict], extra_fields: list[str] | None = None):
     if not records:
         return
-    fields = FIELD_ORDER + ["_source_file", "_source_sheet", "_source_row"]
+    fields = FIELD_ORDER + (extra_fields or []) + ["_source_file", "_source_sheet", "_source_row"]
     with path.open("w", encoding="utf-8-sig", newline="") as file:
         writer = csv.DictWriter(file, fieldnames=fields)
         writer.writeheader()
@@ -145,24 +156,41 @@ def run_lark(payload_path: Path, base_token: str, table_id: str, dry_run: bool):
     )
 
 
-def import_records(records: list[dict], run_dir: Path, base_token: str, table_id: str, dry_run: bool):
+def import_records(
+    records: list[dict],
+    run_dir: Path,
+    base_token: str,
+    table_id: str,
+    dry_run: bool,
+    field_order: list[str],
+):
     total = len(records)
     written = 0
     for start in range(0, total, BATCH_SIZE):
         chunk = records[start:start + BATCH_SIZE]
-        rows = [[record.get(field, "") for field in FIELD_ORDER] for record in chunk]
-        payload = {"fields": FIELD_ORDER, "rows": rows}
+        rows = [[record.get(field, "") for field in field_order] for record in chunk]
+        payload = {"fields": field_order, "rows": rows}
         payload_path = run_dir / f"batch_{start // BATCH_SIZE + 1:04d}.json"
         payload_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
 
-        result = run_lark(payload_path, base_token, table_id, dry_run)
         log_path = run_dir / f"batch_{start // BATCH_SIZE + 1:04d}.log"
-        log_path.write_text(result.stdout + "\n" + result.stderr, encoding="utf-8")
-        if result.returncode != 0:
-            raise RuntimeError(f"batch {start // BATCH_SIZE + 1} failed: {result.stderr or result.stdout}")
+        batch_no = start // BATCH_SIZE + 1
+        for attempt in range(1, MAX_BATCH_RETRIES + 1):
+            result = run_lark(payload_path, base_token, table_id, dry_run)
+            output = result.stdout + "\n" + result.stderr
+            log_path.write_text(output, encoding="utf-8")
+            if result.returncode == 0:
+                break
+            if "limited" not in output and "800004135" not in output:
+                raise RuntimeError(f"batch {batch_no} failed: {result.stderr or result.stdout}")
+            if attempt == MAX_BATCH_RETRIES:
+                raise RuntimeError(f"batch {batch_no} failed after retries: {result.stderr or result.stdout}")
+            wait_seconds = 3 * attempt
+            print(f"batch {batch_no} rate limited, retrying in {wait_seconds}s ({attempt}/{MAX_BATCH_RETRIES})")
+            time.sleep(wait_seconds)
         written += len(chunk)
         print(f"imported {written}/{total}")
-        time.sleep(0.2)
+        time.sleep(1.0 if not dry_run else 0.2)
 
 
 def main():
@@ -187,10 +215,13 @@ def main():
     run_dir.mkdir(parents=True, exist_ok=True)
 
     records, issues = clean_records(args.source_dir)
-    write_csv(run_dir / "cleaned_records.csv", records)
-    write_issues(run_dir / "blocked_issues.csv", issues)
+    field_order = list(FIELD_ORDER)
+    extra_csv_fields: list[str] = []
+    catalog_summary = {"enabled": False, "reason": "local-only run"}
 
     if issues:
+        write_csv(run_dir / "cleaned_records.csv", records)
+        write_issues(run_dir / "blocked_issues.csv", issues)
         print(json.dumps({
             "ok": False,
             "records": len(records),
@@ -203,7 +234,33 @@ def main():
         raise SystemExit("no records to import")
 
     if args.push or args.dry_run:
-        import_records(records, run_dir, args.base_token, args.table_id, args.dry_run)
+        try:
+            records, catalog_field_id, catalog_summary = attach_catalog_links(
+                records,
+                table_id=args.table_id,
+                lark_cli=LARK_CLI,
+                base_token=args.base_token,
+                cwd=ROOT,
+                source_name_field="合同名称",
+                remark_field="备注",
+                strict=True,
+            )
+        except CatalogLinkError as exc:
+            failed_path = run_dir / "catalog_link_error.json"
+            failed_path.write_text(
+                json.dumps({"error": str(exc)}, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            raise SystemExit(f"catalog link failed; see {failed_path}") from exc
+        if catalog_field_id and catalog_field_id not in field_order:
+            field_order.append(catalog_field_id)
+            extra_csv_fields.append(catalog_field_id)
+
+    write_csv(run_dir / "cleaned_records.csv", records, extra_csv_fields=extra_csv_fields)
+    write_issues(run_dir / "blocked_issues.csv", issues)
+
+    if args.push or args.dry_run:
+        import_records(records, run_dir, args.base_token, args.table_id, args.dry_run, field_order)
 
     print(json.dumps({
         "ok": True,
@@ -215,7 +272,8 @@ def main():
         "run_dir": str(run_dir),
         "cleaned_records_path": str(run_dir / "cleaned_records.csv"),
         "blocked_issues_path": str(run_dir / "blocked_issues.csv"),
-        "field_order": FIELD_ORDER,
+        "field_order": field_order,
+        "catalog_link": catalog_summary,
     }, ensure_ascii=False, indent=2))
 
 

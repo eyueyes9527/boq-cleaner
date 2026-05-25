@@ -48,16 +48,37 @@ excel:
     - "编制说明"
     - "汇总表"
     - "综合单价分析"
+    - "单价分析"
+    - "单价分析表"
   empty_values: ["/", "-", "—", "", null]
+  sheet_visibility:
+    read_hidden_rows: true
+    skip_hidden_sheets: true
+  duplicate_converted_files:
+    skip_xls_when_same_stem_xlsx_or_xlsm_exists: true
+  header_detection:
+    anchor_keywords: ["项目编号", "项目编码", "序号"]
+    project_name_header_keywords: ["项目名称"]
+    project_name_header_typos: ["项"]
+    scan_top_rows: 30
 
 hierarchy:
   output_field: "层级路径"
   separator: "/"
   source_fields: ["科目", "二级页签"]
   rule: "无编号、无单位、无单价但有名称的行视为同级标题，切换当前二级标题，不追加到上一标题。"
+  skip_as_title_rows:
+    - "类别=清单项、单位=项、数量/单价/合价均为空"
+    - "类别=清单项、无单位、数量为空或0、单价为空或0、合价为空或0"
+    - "非清单项、无单位且数量/单价/合价均为空或0"
 
 row_visibility:
   read_hidden_rows: true
+  skip_hidden_sheets: true
+
+unit_fixes:
+  exact_project_name:
+    马桶（甲供）: "套"
 
 splitting:
   max_rows_per_table: 20000
@@ -70,6 +91,8 @@ writing:
     batch_size_create: 200
     batch_size_update: 10
     batch_size_delete: 200
+    batch_create_max_retries: 5
+    rate_limit_backoff_seconds: "3 * attempt"
 
 blockers:
   - "字段映射缺失（关键列找不到）"

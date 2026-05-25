@@ -90,3 +90,15 @@ FITOUT_20260524_FIELD_IDS = {
 FITOUT_20260524_VIEW_FIELD_IDS = [
     FITOUT_20260524_FIELD_IDS[name] for name in IMPORT_FIELD_ORDER
 ]
+
+# 清单目录关联配置。导入脚本会按目标表 ID 自动追加对应关联字段。
+CATALOG_DIRECTORY_TABLE_ID = "tblobzr4LplrbiYT"
+CATALOG_DIRECTORY_FIELDS = {
+    "清单名称": "fldUMgZolF",
+    "合同名称": "fldup23xB1",
+}
+CATALOG_LINK_FIELD_BY_TABLE = {
+    "tblY7o8bNiBxEYGA": "fldPFg6p1L",
+    "tbleZCShQmE1aRhQ": "fld6BcTVBu",
+    "tblRdm1rcN46iGuw": "fldEoK947G",
+}

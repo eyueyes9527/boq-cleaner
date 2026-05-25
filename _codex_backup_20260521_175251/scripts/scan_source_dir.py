@@ -45,8 +45,17 @@ def attr(obj, name, default=""):
 
 
 def iter_excel_files(source_dir: Path):
+    converted_stems = {
+        path.stem
+        for path in source_dir.glob("*.xls*")
+        if path.suffix.lower() in {".xlsx", ".xlsm"}
+    }
     for path in sorted(source_dir.glob("*.xls*")):
-        if not path.name.startswith("~$"):
+        if path.name.startswith("~$"):
+            continue
+        if path.suffix.lower() == ".xls" and path.stem in converted_stems:
+            continue
+        else:
             yield path
 
 

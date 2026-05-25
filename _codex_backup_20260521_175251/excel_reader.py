@@ -86,32 +86,35 @@ def get_cell_value(ws, row: int, col: int):
 
 def find_header_anchor(ws) -> Optional[Tuple[int, int]]:
     """找到表头锚点行和项目编号列。返回 (header_row, col_of_项目编号)"""
+    def has_name_header(row: int, anchor_col: int) -> bool:
+        for c2 in range(1, min(ws.max_column + 1, 20)):
+            v2 = str(get_cell_value(ws, row, c2) or "").strip()
+            if "项目名称" in v2:
+                return True
+        typo_col = anchor_col + 1
+        typo = str(get_cell_value(ws, row, typo_col) or "").strip()
+        return typo == "项"
+
     for row in range(1, min(ws.max_row + 1, 30)):
         for col in range(1, min(ws.max_column + 1, 20)):
             val = str(get_cell_value(ws, row, col) or "").strip()
             if "项目编号" in val:
-                for c2 in range(1, min(ws.max_column + 1, 20)):
-                    v2 = str(get_cell_value(ws, row, c2) or "").strip()
-                    if "项目名称" in v2:
-                        return row, col
+                if has_name_header(row, col):
+                    return row, col
     # 回退：找 项目编码
     for row in range(1, min(ws.max_row + 1, 30)):
         for col in range(1, min(ws.max_column + 1, 20)):
             val = str(get_cell_value(ws, row, col) or "").strip()
             if "项目编码" in val:
-                for c2 in range(1, min(ws.max_column + 1, 20)):
-                    v2 = str(get_cell_value(ws, row, c2) or "").strip()
-                    if "项目名称" in v2:
-                        return row, col
+                if has_name_header(row, col):
+                    return row, col
     # 回退：部分精装清单第一列为“序号”，没有“项目编号”
     for row in range(1, min(ws.max_row + 1, 30)):
         for col in range(1, min(ws.max_column + 1, 20)):
             val = str(get_cell_value(ws, row, col) or "").strip()
             if val == "序号":
-                for c2 in range(1, min(ws.max_column + 1, 20)):
-                    v2 = str(get_cell_value(ws, row, c2) or "").strip()
-                    if "项目名称" in v2:
-                        return row, col
+                if has_name_header(row, col):
+                    return row, col
     return None
 
 
@@ -381,6 +384,11 @@ def parse_number(val) -> Optional[float]:
         return None
 
 
+def format_float_rate(float_rate: float) -> str:
+    """Format a source float-rate number for display in pricing info."""
+    return f"{float_rate * 100:.2f}".rstrip("0").rstrip(".") + "%"
+
+
 def sum_numeric_cells(ws, row: int, start_col: int, end_col: int) -> Optional[float]:
     """汇总一段单元格里的数值。没有任何数值时返回 None。"""
     total = 0.0
@@ -413,7 +421,7 @@ def price_from_supply_install(ws, header_row: int, row: int, anchor_col: int, to
 
 SKIP_SHEET_KEYWORDS = [
     "封皮", "编制说明", "汇总表", "综合单价分析",
-    "单价分析表", "开办费", "附表", "计日工", "照管费",
+    "单价分析表", "单价分析", "开办费", "附表", "计日工", "照管费",
     "甲供材", "暂列", "备件品", "面积", "WpsReserved",
     "招标清单列表",
 ]
@@ -497,10 +505,12 @@ def clean_excel(file_path: str) -> Tuple[List[CleanedItem], List[AnomalyItem]]:
     contract_name = extract_contract_name(file_name)
 
     for sheet_name in wb.sheetnames:
+        ws = wb[sheet_name]
+        if getattr(ws, "sheet_state", "visible") != "visible":
+            continue
         if not should_process_sheet(sheet_name):
             continue
 
-        ws = wb[sheet_name]
         if ws.max_row < 5 or ws.max_column < 5:
             continue
 
@@ -570,7 +580,7 @@ def clean_excel(file_path: str) -> Tuple[List[CleanedItem], List[AnomalyItem]]:
                     # 生成定价信息 + 浮率验证
                     pricing_info = ""
                     if base_price is not None and float_rate is not None:
-                        pricing_info = f"基准价:{base_price}, 上下浮率:{float_rate}%"
+                        pricing_info = f"基准价:{base_price}, 上下浮率:{format_float_rate(float_rate)}"
                         # 浮率验证：区分两种语义
                         # |浮率| > 0.5 → 乘数模式（0.988=98.8%，直接乘）
                         # |浮率| <= 0.5 → 幅度模式（-0.083=-8.3%，基准价×(1+浮率)）
@@ -599,7 +609,7 @@ def clean_excel(file_path: str) -> Tuple[List[CleanedItem], List[AnomalyItem]]:
                         # 下浮后模式：无浮率列，从比值计算
                         if base_price:
                             implied_rate = round(unit_price / base_price, 6)
-                            pricing_info = f"基准价:{base_price}, 上下浮率:{implied_rate}%"
+                            pricing_info = f"基准价:{base_price}, 上下浮率:{format_float_rate(implied_rate)}"
                         else:
                             pricing_info = f"基准价:{base_price}"
                     elif base_price is not None:
@@ -636,6 +646,8 @@ def clean_excel(file_path: str) -> Tuple[List[CleanedItem], List[AnomalyItem]]:
             pname_s = str(pname or "").strip()
             pdesc_s = str(pdesc or "").strip()
             unit_s = str(unit or "").strip()
+            if not unit_s and pname_s == "马桶（甲供）":
+                unit_s = "套"
             qty_f = parse_number(qty)
             sum_qty_f = parse_number(sum_qty) if sum_qty is not None else None
             if qty_f is None and sum_qty_f is None and sum_qty_off is not None and sum_qty_off > 5:
@@ -706,6 +718,31 @@ def clean_excel(file_path: str) -> Tuple[List[CleanedItem], List[AnomalyItem]]:
             
             # 清单项但无单位无单价 → 实为同级标题，切换当前二级标题。
             if is_list and not unit_s and not has_price:
+                sub_page_tab = pname_s
+                continue
+
+            # 部分清单把层级标题误标为“清单项”，常见特征是单位为“项”，
+            # 名称和特征描述相同，且数量/单价/合价均为空。
+            if (
+                is_list
+                and unit_s == "项"
+                and qty_f is None
+                and unit_price is None
+                and sum_price_f is None
+                and pname_s
+            ):
+                sub_page_tab = pname_s
+                continue
+
+            # 清单项中无单位、无数量且金额为 0/空的行，多为专业占位或分组行。
+            if (
+                is_list
+                and not unit_s
+                and (qty_f in (None, 0.0))
+                and (unit_price in (None, 0.0))
+                and (sum_price_f in (None, 0.0))
+                and pname_s
+            ):
                 sub_page_tab = pname_s
                 continue
 

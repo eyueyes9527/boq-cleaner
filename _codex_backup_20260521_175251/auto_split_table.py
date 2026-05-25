@@ -28,6 +28,7 @@ from typing import List, Dict
 import sys
 
 from excel_reader import clean_excel
+from catalog_linker import CatalogLinkError, attach_catalog_links, catalog_link_field_id
 
 # ========== 配置区 ==========
 BASE_TOKEN = "ARDubM91FaL62esCg1hcnHYtnFh"
@@ -165,6 +166,10 @@ def parse_num(v):
         return None
 
 
+def format_float_rate(float_rate):
+    return f"{float_rate * 100:.2f}".rstrip("0").rstrip(".") + "%"
+
+
 def extract_all_records(sheet_name, excel_path):
     """从指定sheet提取所有记录"""
     try:
@@ -252,7 +257,7 @@ def extract_all_records(sheet_name, excel_path):
 
             # 生成定价信息字符串
             if base_price is not None and float_rate is not None:
-                pricing_info = f"基准价:{base_price}, 上下浮率:{float_rate}%"
+                pricing_info = f"基准价:{base_price}, 上下浮率:{format_float_rate(float_rate)}"
 
             # 浮率验证：区分乘数模式(|浮率|>0.5)和幅度模式(|浮率|<=0.5)
             if base_price is not None and float_rate is not None and unit_price is not None:
@@ -721,6 +726,7 @@ def import_contract(contract_name: str, excel_path: str, table_id: str = None, s
             '不含税单价': item.不含税单价,
             '汇总合价': item.汇总合价,
             '定价信息': item.定价信息,
+            '_source_file': item.source_file,
         })
 
     print(f"   解析到 {len(sheet_counts)} 个目标sheet:")
@@ -733,6 +739,31 @@ def import_contract(contract_name: str, excel_path: str, table_id: str = None, s
 
     record_count = len(all_records)
     print(f"\n[STAT] 合同记录数: {record_count}")
+
+    if not dry_run:
+        catalog_field_id = catalog_link_field_id(table_id)
+        if catalog_field_id:
+            try:
+                all_records, _, catalog_summary = attach_catalog_links(
+                    all_records,
+                    table_id=table_id,
+                    lark_cli=LARK_CLI,
+                    base_token=BASE_TOKEN,
+                    cwd=os.path.dirname(os.path.abspath(__file__)),
+                    source_name_field='合同名称',
+                    remark_field='备注',
+                    strict=True,
+                )
+            except CatalogLinkError as exc:
+                print(f"[ERROR] 清单目录匹配失败: {exc}")
+                return
+            if catalog_field_id not in FIELD_IDS:
+                FIELD_IDS.append(catalog_field_id)
+                FIELD_NAME_MAP[catalog_field_id] = catalog_field_id
+            print(
+                "[OK] 清单目录关联已匹配: "
+                f"{catalog_summary.get('matched')}/{catalog_summary.get('records')}"
+            )
 
     # 创建运行目录（用于归档）
     timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
